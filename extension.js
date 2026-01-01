@@ -11,18 +11,26 @@ let logFilePath = null;
 let logStream = null;
 let lastLineLogged = -1;
 let lastFileName = '';
-// Dedupe: remember last logged content per file+line
+
+// Dedupe: remember last logged content per file + line number
 /** @type {Map<string, Map<number, string>>} */
 const lastLoggedLineTextByFile = new Map();
-// Global dedupe: remember any line content we've already logged in this session (across files/lines)
+
+// Global dedupe: remember any line  we've already logged
 /** @type {Set<string>} */
 const seenLineContent = new Set();
-// Agent / non-editor changes: track file writes via FS watcher and diff against snapshots
+
+// Agent changes: track file writes via FS watcher and diff against snapshots
 let fsWatcher = null;
+
+// Track file snapshots, key is file URI and value is array of lines in the file
 /** @type {Map<string, string[]>} */
 const fileSnapshotLinesByFileKey = new Map();
+
+// Track pending file process, key is file URI and value is timeout ID, used to debounce file changes
 /** @type {Map<string, NodeJS.Timeout>} */
 const pendingFsProcessByFileKey = new Map();
+
 let openDocListener = null;
 let recordingStartedAtMs = 0;
 const FS_WARMUP_MS = 1000;
@@ -37,8 +45,9 @@ function isRecordingOutputFile(documentFsPath) {
 
 function shouldIgnoreFsPath(documentFsPath) {
 	if (!documentFsPath) return true;
+	// Check if the file is the output file
 	if (isRecordingOutputFile(documentFsPath)) return true;
-	// Avoid massive noise
+	// Avoid massive noise because node_modules changes a lot
 	if (documentFsPath.includes(`${path.sep}node_modules${path.sep}`)) return true;
 	if (documentFsPath.includes(`${path.sep}.git${path.sep}`)) return true;
 	return false;
@@ -76,7 +85,8 @@ function scheduleProcessFsUri(uri) {
 	if (!isRecording || !logStream) return;
 	if (!uri || uri.scheme !== 'file') return;
 	if (shouldIgnoreFsPath(uri.fsPath)) return;
-	// Avoid logging “startup churn” right when recording begins (language servers / autosave may touch files)
+	
+	// Avoid logging startup noise right when recording begins
 	if (recordingStartedAtMs && Date.now() - recordingStartedAtMs < FS_WARMUP_MS) return;
 
 	const fileKey = uri.toString();
@@ -160,7 +170,7 @@ function activate(context) {
 		const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
 		logFilePath = path.join(workspaceFolder.uri.fsPath, `code-recording-${timestamp}.txt`);
 
-		// Initialize log file
+		// Set up the log file
 		try {
 			logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
 			logStream.write(`=== Recording Started: ${new Date().toLocaleString()} ===\n\n`);
@@ -174,14 +184,14 @@ function activate(context) {
 			fileSnapshotLinesByFileKey.clear();
 			vscode.window.showInformationMessage('Recording started! Logging completed lines.');
 
-			// Snapshot currently-open docs as baseline for FS diffs (so we don't log whole files on first save)
+			// Snapshot currently-open docs as baseline (the file initial content) for FS diffs
 			vscode.workspace.textDocuments.forEach((doc) => {
 				if (doc.uri.scheme !== 'file') return;
 				if (shouldIgnoreFsPath(doc.uri.fsPath)) return;
 				fileSnapshotLinesByFileKey.set(doc.uri.toString(), doc.getText().split(/\r?\n/));
 			});
 
-			// If the user opens a new file during recording, snapshot it as baseline to avoid “open-time” noise
+			// If the user opens a new file during recording, snapshot it as baseline for that file. We are setting up an array of lines for that file
 			openDocListener = vscode.workspace.onDidOpenTextDocument((doc) => {
 				if (!isRecording) return;
 				if (doc.uri.scheme !== 'file') return;
@@ -191,11 +201,12 @@ function activate(context) {
 					fileSnapshotLinesByFileKey.set(key, doc.getText().split(/\r?\n/));
 				}
 			});
-			context.subscriptions.push(openDocListener);
+			context.subscriptions.push(openDocListener); // Discard the listener when the extension is deactivated
 
 			// Watch for file changes on disk (captures edits by agents / tools that bypass editor keystrokes)
 			fsWatcher = vscode.workspace.createFileSystemWatcher('**/*');
 			context.subscriptions.push(fsWatcher);
+			// Schedule the file change to be processed
 			fsWatcher.onDidCreate((uri) => scheduleProcessFsUri(uri));
 			fsWatcher.onDidChange((uri) => scheduleProcessFsUri(uri));
 			fsWatcher.onDidDelete((uri) => {
