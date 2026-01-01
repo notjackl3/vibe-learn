@@ -1,1 +1,13 @@
-spring.application.name=spring-boot-ingest
+spring:
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:kafka:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+
+kafka:
+  topic:
+    code-events: ${KAFKA_TOPIC_CODE_EVENTS:code-events}
+
+api:
+  key: ${API_KEY:custom-api-key-here}

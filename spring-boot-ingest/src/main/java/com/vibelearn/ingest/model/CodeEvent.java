@@ -11,6 +11,7 @@ import jakarta.validation.constraints.NotNull;
 @AllArgsConstructor
 @NoArgsConstructor
 public class CodeEvent {
+    
     @NotBlank(message = "Session ID is required")
     private String sessionId;
     @NotNull(message = "Client timestamp is required")

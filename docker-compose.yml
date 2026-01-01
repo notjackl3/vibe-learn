@@ -70,6 +70,20 @@ services:
       - ME_CONFIG_MONGODB_PORT=27017
       - ME_CONFIG_BASICAUTH=false
 
+  ingest:
+    build: ./spring-boot-ingest
+    container_name: vibe_ingest
+    ports:
+      - "8080:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC_CODE_EVENTS: code-events
+      API_KEY: custom-api-key-here
 volumes:
   kafka_data:
   mongo_data:
