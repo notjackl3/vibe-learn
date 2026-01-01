@@ -11,6 +11,44 @@ let logFilePath = null;
 let logStream = null;
 let lastLineLogged = -1;
 let lastFileName = '';
+// Dedupe: remember last logged content per file+line
+/** @type {Map<string, Map<number, string>>} */
+const lastLoggedLineTextByFile = new Map();
+// Global dedupe: remember any line content we've already logged in this session (across files/lines)
+/** @type {Set<string>} */
+const seenLineContent = new Set();
+
+function isRecordingOutputFile(documentFsPath) {
+	if (!documentFsPath) return false;
+	const base = path.basename(documentFsPath);
+	if (/^code-recording-.*\.txt$/i.test(base)) return true;
+	if (logFilePath && path.resolve(documentFsPath) === path.resolve(logFilePath)) return true;
+	return false;
+}
+
+/**
+ * @param {string} fileKey
+ * @param {number} lineNumberZeroBased
+ * @param {string} nextText
+ */
+function shouldLogLine(fileKey, lineNumberZeroBased, nextText) {
+	let byLine = lastLoggedLineTextByFile.get(fileKey);
+	if (!byLine) {
+		byLine = new Map();
+		lastLoggedLineTextByFile.set(fileKey, byLine);
+	}
+	const prev = byLine.get(lineNumberZeroBased);
+	// Always update the per-line cache so we don't re-trigger on the same line later
+	byLine.set(lineNumberZeroBased, nextText);
+
+	// 1) Per-line dedupe (same file+line text)
+	if (prev === nextText) return false;
+
+	// 2) Global dedupe (same text anywhere)
+	if (seenLineContent.has(nextText)) return false;
+	seenLineContent.add(nextText);
+	return true;
+}
 
 /**
  * @param {vscode.ExtensionContext} context
@@ -41,6 +79,8 @@ function activate(context) {
 			isRecording = true;
 			lastLineLogged = -1;
 			lastFileName = '';
+			lastLoggedLineTextByFile.clear();
+			seenLineContent.clear();
 			vscode.window.showInformationMessage('Recording started! Logging completed lines.');
 
 			// Listen to document changes
@@ -48,24 +88,47 @@ function activate(context) {
 				if (!isRecording || !logStream) return;
 
 				const document = event.document;
+				if (document.uri.scheme !== 'file') return;
+				if (isRecordingOutputFile(document.uri.fsPath)) return;
+
 				const fileName = path.basename(document.fileName);
 				const timestamp = new Date().toLocaleTimeString();
+				const fileKey = document.uri.toString();
 
 				event.contentChanges.forEach((change) => {
-					console.log('change', change);
-					console.log('change rangeLength', change.rangeLength);
 					const currentLine = change.range.start.line;
 
-					// 1. If user presses Enter (change contains newline)
-					// 2. Or if user moved to a different line than the last one we tracked
-					if (change.text.includes('\n') || (lastLineLogged !== -1 && lastLineLogged !== currentLine)) {
+					// Log if: 
+					// 1. User pressed Enter (\n)
+					// 2. User moved to a different line (lastLineLogged !== currentLine)
+					// 3. User switched to a different file (lastFileName !== fileName)
+					if (change.text.includes('\n') || 
+						(lastLineLogged !== -1 && (lastLineLogged !== currentLine || lastFileName !== fileName))) {
 						
-						// If we moved lines, log the line we just left
+						// Determine which file and line to log
+						// If we switched files, we log the PREVIOUS file/line we just left
+						const fileToLog = (lastFileName !== '' && lastFileName !== fileName) ? lastFileName : fileName;
 						const lineToLog = (lastLineLogged !== -1 && lastLineLogged !== currentLine) ? lastLineLogged : currentLine;
-						const lineText = document.lineAt(lineToLog).text;
+						const fileKeyToLog = (lastFileName !== '' && lastFileName !== fileName)
+							? (vscode.workspace.textDocuments.find(d => path.basename(d.fileName) === lastFileName)?.uri.toString() || fileKey)
+							: fileKey;
+						
+						try {
+							// We need to find the correct document to get the text from if we switched files
+							let textDocument = document;
+							if (lastFileName !== '' && lastFileName !== fileName) {
+								// Find the old document in open tabs if possible
+								const oldDoc = vscode.workspace.textDocuments.find(d => path.basename(d.fileName) === lastFileName);
+								if (oldDoc) textDocument = oldDoc;
+							}
 
-						if (lineText.trim().length > 0) {
-							logStream.write(`[${timestamp}] ${fileName} | Line ${lineToLog + 1}: ${lineText}\n`);
+							const lineText = textDocument.lineAt(lineToLog).text;
+							const normalizedLineText = lineText.replace(/^\s+/, '');
+							if (normalizedLineText.trim().length > 0 && shouldLogLine(fileKeyToLog, lineToLog, normalizedLineText)) {
+								logStream.write(`[${timestamp}] ${fileToLog} | Line ${lineToLog + 1}: ${normalizedLineText}\n`);
+							}
+						} catch (e) {
+							// Fallback if the line or document is no longer accessible
 						}
 					}
 					
@@ -91,12 +154,19 @@ function activate(context) {
 		// Flush the last line being worked on
 		if (isRecording && logStream && lastLineLogged !== -1) {
 			try {
-				const editor = vscode.window.activeTextEditor;
-				if (editor && editor.document) {
-					const lineText = editor.document.lineAt(lastLineLogged).text;
-					if (lineText.trim().length > 0) {
+				// Try to find the document for the last file we were editing
+				const textDocument = vscode.workspace.textDocuments.find(d => path.basename(d.fileName) === lastFileName) 
+				                  || vscode.window.activeTextEditor?.document;
+				
+				if (textDocument && textDocument.uri.scheme === 'file' && !isRecordingOutputFile(textDocument.uri.fsPath)) {
+					const lineText = textDocument.lineAt(lastLineLogged).text;
+					const normalizedLineText = lineText.replace(/^\s+/, '');
+					if (normalizedLineText.trim().length > 0) {
 						const timestamp = new Date().toLocaleTimeString();
-						logStream.write(`[${timestamp}] ${path.basename(editor.document.fileName)} | Line ${lastLineLogged + 1}: ${lineText} (Final)\n`);
+						const key = textDocument.uri.toString();
+						if (shouldLogLine(key, lastLineLogged, normalizedLineText)) {
+							logStream.write(`[${timestamp}] ${path.basename(textDocument.fileName)} | Line ${lastLineLogged + 1}: ${normalizedLineText} (Final)\n`);
+						}
 					}
 				}
 			} catch (e) {
