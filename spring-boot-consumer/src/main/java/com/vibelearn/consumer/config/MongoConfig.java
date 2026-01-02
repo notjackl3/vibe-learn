@@ -13,8 +13,6 @@ public class MongoConfig {
     private final String mongoUri;
     private final String databaseName;
 
-    // By putting @Value in the constructor, Spring waits until 
-    // properties are fully loaded before trying to build this bean.
     public MongoConfig(
         @Value("${spring.data.mongodb.uri:mongodb://localhost:27017/vibe_learn}") String mongoUri,
         @Value("${spring.data.mongodb.database:vibe_learn}") String databaseName) {

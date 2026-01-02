@@ -26,7 +26,6 @@ services:
       retries: 12
       start_period: 20s
 
-
   mongo:
     image: mongo:latest
     container_name: vibe_mongo
@@ -70,6 +69,23 @@ services:
       - ME_CONFIG_MONGODB_PORT=27017
       - ME_CONFIG_BASICAUTH=false
 
+  kafka-init:
+    image: apache/kafka:3.8.1
+    container_name: vibe_kafka_init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ['/bin/sh', '-c']
+    command: |
+      "
+      # Create topic
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic code-events --replication-factor 1 --partitions 3
+      
+      # List topics to verify
+      echo 'Available topics:'
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
+      "
+
   ingest:
     build: ./spring-boot-ingest
     container_name: vibe_ingest
@@ -80,6 +96,8 @@ services:
         condition: service_healthy
       mongo:
         condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     environment:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_TOPIC_CODE_EVENTS: code-events
@@ -87,8 +105,11 @@ services:
 
   consumer:
     build: ./spring-boot-consumer
+    image: vibe-learn-consumer
     container_name: vibe_consumer
     restart: unless-stopped
+    ports:
+      - "8081:8080"
     depends_on:
       kafka:
         condition: service_healthy
@@ -96,12 +117,16 @@ services:
         condition: service_healthy
       ingest:
         condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
     environment:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       SPRING_KAFKA_CONSUMER_GROUP_ID: event-consumer-group
       KAFKA_TOPIC_CODE_EVENTS: code-events
       SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/vibe_learn
+      SPRING_DATA_MONGODB_DATABASE: vibe_learn
       LOGGING_LEVEL_COM_VIBE_CONSUMER: INFO
+
 volumes:
   kafka_data:
   mongo_data:

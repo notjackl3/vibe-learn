@@ -11,10 +11,10 @@ import org.springframework.data.mongodb.core.index.Indexed;
  * MongoDB document representing a code event.
  * Stored in the "events" collection.
  */
-@Document(collection = "events")  // MongoDB collection name
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@Document(collection = "events")  // MongoDB collection name
 public class CodeEvent {
 
     @Id  // MongoDB _id field (auto-generated if null)

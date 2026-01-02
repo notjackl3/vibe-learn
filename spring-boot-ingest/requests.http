@@ -1,0 +1,14 @@
+### Send POST request with json body
+POST http://localhost:8080/api/events
+Content-Type: application/json
+X-API-Key: custom-api-key-here
+
+{
+  "sessionId": "test-123",
+  "clientTimestampMs": 1704211200000,
+  "fileUri": "file:///test.js",
+  "fileName": "test2.js",
+  "lineNumber": 2,
+  "textNormalized": "console.log(\"please work!!!\");",
+  "source": "manual"
+}

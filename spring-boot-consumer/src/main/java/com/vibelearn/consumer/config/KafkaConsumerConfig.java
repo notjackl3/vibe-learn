@@ -10,15 +10,18 @@ import org.springframework.kafka.annotation.EnableKafka;
 import org.springframework.kafka.config.ConcurrentKafkaListenerContainerFactory;
 import org.springframework.kafka.core.ConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.kafka.support.serializer.JacksonJsonDeserializer;
+import org.springframework.util.backoff.FixedBackOff;
+import lombok.extern.slf4j.Slf4j;
+
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * Configures Kafka consumer for receiving code events.
- */
 @Configuration
-@EnableKafka  // Enables @KafkaListener annotations
+@EnableKafka
+@Slf4j
 public class KafkaConsumerConfig {
 
     @Value("${spring.kafka.bootstrap-servers}")
@@ -33,19 +36,21 @@ public class KafkaConsumerConfig {
         
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
-        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, JacksonJsonDeserializer.class);
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, true);
         
-        // Trust all packages for deserialization (or specify specific package)
+        // Use ErrorHandlingDeserializer to catch and log deserialization errors
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ErrorHandlingDeserializer.class);
+        
+        // Specify the actual deserializers - using JacksonJsonDeserializer
+        props.put(ErrorHandlingDeserializer.KEY_DESERIALIZER_CLASS, StringDeserializer.class.getName());
+        props.put(ErrorHandlingDeserializer.VALUE_DESERIALIZER_CLASS, JacksonJsonDeserializer.class.getName());
+        
+        // JacksonJsonDeserializer configuration
         props.put(JacksonJsonDeserializer.TRUSTED_PACKAGES, "*");
         props.put(JacksonJsonDeserializer.USE_TYPE_INFO_HEADERS, false);
-        props.put(JacksonJsonDeserializer.VALUE_DEFAULT_TYPE, CodeEvent.class);
-        
-        // Start from earliest if no offset exists (for development)
-        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        
-        // Commit offsets automatically after processing
-        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, true);
+        props.put(JacksonJsonDeserializer.VALUE_DEFAULT_TYPE, CodeEvent.class.getName());
         
         return new DefaultKafkaConsumerFactory<>(props);
     }
@@ -53,13 +58,18 @@ public class KafkaConsumerConfig {
     @Bean
     public ConcurrentKafkaListenerContainerFactory<String, CodeEvent> 
            kafkaListenerContainerFactory() {
+
+        log.info("========================================");
+        log.info("Creating KafkaListenerContainerFactory!");
+        log.info("========================================");
         
         ConcurrentKafkaListenerContainerFactory<String, CodeEvent> factory =
             new ConcurrentKafkaListenerContainerFactory<>();
         factory.setConsumerFactory(consumerFactory());
+        factory.setConcurrency(1);
         
-        // Number of concurrent consumer threads (adjust based on load)
-        factory.setConcurrency(3);
+        // Add error handler to log errors
+        factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(0L, 0L)));
         
         return factory;
     }
