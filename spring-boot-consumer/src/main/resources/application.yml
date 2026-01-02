@@ -1,0 +1,32 @@
+spring:
+  application:
+    name: event-consumer
+    
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9094}
+    consumer:
+      group-id: ${SPRING_KAFKA_CONSUMER_GROUP_ID:event-consumer-group}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+        spring.json.value.default.type: com.vibelearn.consumer.model.CodeEvent
+  data: mongodb:
+  mongodb:
+    host: ${SPRING_DATA_MONGODB_HOST:mongo}
+    port: ${SPRING_DATA_MONGODB_PORT:27017}
+    database: ${SPRING_DATA_MONGODB_DATABASE:vibe_learn}
+    uri: ${SPRING_DATA_MONGODB_URI:mongodb://mongo:27017/vibe_learn}
+
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.mongodb.autoconfigure.MongoAutoConfiguration
+
+kafka:
+  topic:
+    code-events: ${KAFKA_TOPIC_CODE_EVENTS:code-events}
+
+logging:
+  level:
+    com.vibe.consumer: DEBUG

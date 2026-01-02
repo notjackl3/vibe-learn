@@ -28,7 +28,7 @@ services:
 
 
   mongo:
-    image: mongo:7
+    image: mongo:latest
     container_name: vibe_mongo
     restart: unless-stopped
     ports:
@@ -38,7 +38,7 @@ services:
     volumes:
       - mongo_data:/data/db
     healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.adminCommand('ping').ok\" | grep 1 >/dev/null"]
+      test: ["CMD-SHELL", "mongosh --quiet --eval \"db.runCommand({ ping: 1 }).ok\" | grep -q 1"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -84,6 +84,24 @@ services:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_TOPIC_CODE_EVENTS: code-events
       API_KEY: custom-api-key-here
+
+  consumer:
+    build: ./spring-boot-consumer
+    container_name: vibe_consumer
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      ingest:
+        condition: service_started
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SPRING_KAFKA_CONSUMER_GROUP_ID: event-consumer-group
+      KAFKA_TOPIC_CODE_EVENTS: code-events
+      SPRING_DATA_MONGODB_URI: mongodb://mongo:27017/vibe_learn
+      LOGGING_LEVEL_COM_VIBE_CONSUMER: INFO
 volumes:
   kafka_data:
   mongo_data:
