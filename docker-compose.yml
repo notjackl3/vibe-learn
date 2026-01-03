@@ -78,11 +78,16 @@ services:
     entrypoint: ['/bin/sh', '-c']
     command: |
       "
-      # Create topic
+      echo 'Waiting for Kafka to be ready...'
+      sleep 10
+      
+      # Create code-events topic
       /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic code-events --replication-factor 1 --partitions 3
       
-      # List topics to verify
-      echo 'Available topics:'
+      # Create __consumer_offsets topic (critical for consumer groups!)
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic __consumer_offsets --replication-factor 1 --partitions 50 --config cleanup.policy=compact
+      
+      echo 'Topics created successfully!'
       /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
       "
 

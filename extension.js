@@ -1,22 +1,25 @@
 // The module 'vscode' contains the VS Code extensibility API
-// Import the module and reference it with the alias vscode in your code below
 const vscode = require('vscode');
-const fs = require('fs');
+const https = require('https');
+const http = require('http');
 const path = require('path');
 
 // Recording state
 let isRecording = false;
+let currentSessionId = null;
 let changeListener = null;
-let logFilePath = null;
-let logStream = null;
 let lastLineLogged = -1;
 let lastFileName = '';
+
+// API Configuration
+const API_URL = 'http://localhost:8080/api/events';
+const API_KEY = 'custom-api-key-here'; // Match your docker-compose.yml
 
 // Dedupe: remember last logged content per file + line number
 /** @type {Map<string, Map<number, string>>} */
 const lastLoggedLineTextByFile = new Map();
 
-// Global dedupe: remember any line  we've already logged
+// Global dedupe: remember any line we've already logged
 /** @type {Set<string>} */
 const seenLineContent = new Set();
 
@@ -33,24 +36,63 @@ const pendingFsProcessByFileKey = new Map();
 
 let openDocListener = null;
 let recordingStartedAtMs = 0;
-const FS_WARMUP_MS = 1000;
+const FS_WARMUP_MS = 2000; // Increased warmup time to avoid initial noise
 
-function isRecordingOutputFile(documentFsPath) {
-	if (!documentFsPath) return false;
-	const base = path.basename(documentFsPath);
-	if (/^code-recording-.*\.txt$/i.test(base)) return true;
-	if (logFilePath && path.resolve(documentFsPath) === path.resolve(logFilePath)) return true;
-	return false;
+/**
+ * Send a code event to the Ingest API
+ * @param {Object} eventData
+ */
+async function sendEventToAPI(eventData) {
+    return new Promise((resolve, reject) => {
+        const data = JSON.stringify(eventData);
+        const url = new URL(API_URL);
+
+        const options = {
+            hostname: url.hostname,
+            port: url.port || 80,
+            path: url.pathname,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(data),
+                'X-API-Key': API_KEY
+            }
+        };
+
+        const client = url.protocol === 'https:' ? https : http;
+
+        const req = client.request(options, (res) => {
+            let responseBody = '';
+
+            res.on('data', (chunk) => {
+                responseBody += chunk;
+            });
+
+            res.on('end', () => {
+                if (res.statusCode >= 200 && res.statusCode < 300) {
+                    resolve({ success: true, data: responseBody });
+                } else {
+                    reject(new Error(`API returned status ${res.statusCode}: ${responseBody}`));
+                }
+            });
+        });
+
+        req.on('error', (error) => {
+            console.error('API request failed:', error);
+            reject(error);
+        });
+
+        req.write(data);
+        req.end();
+    });
 }
 
 function shouldIgnoreFsPath(documentFsPath) {
-	if (!documentFsPath) return true;
-	// Check if the file is the output file
-	if (isRecordingOutputFile(documentFsPath)) return true;
-	// Avoid massive noise because node_modules changes a lot
-	if (documentFsPath.includes(`${path.sep}node_modules${path.sep}`)) return true;
-	if (documentFsPath.includes(`${path.sep}.git${path.sep}`)) return true;
-	return false;
+    if (!documentFsPath) return true;
+    // Avoid massive noise because node_modules changes a lot
+    if (documentFsPath.includes(`${path.sep}node_modules${path.sep}`)) return true;
+    if (documentFsPath.includes(`${path.sep}.git${path.sep}`)) return true;
+    return false;
 }
 
 /**
@@ -59,22 +101,47 @@ function shouldIgnoreFsPath(documentFsPath) {
  * @param {string} nextText
  */
 function shouldLogLine(fileKey, lineNumberZeroBased, nextText) {
-	let byLine = lastLoggedLineTextByFile.get(fileKey);
-	if (!byLine) {
-		byLine = new Map();
-		lastLoggedLineTextByFile.set(fileKey, byLine);
-	}
-	const prev = byLine.get(lineNumberZeroBased);
-	// Always update the per-line cache so we don't re-trigger on the same line later
-	byLine.set(lineNumberZeroBased, nextText);
+    let byLine = lastLoggedLineTextByFile.get(fileKey);
+    if (!byLine) {
+        byLine = new Map();
+        lastLoggedLineTextByFile.set(fileKey, byLine);
+    }
+    const prev = byLine.get(lineNumberZeroBased);
+    // Always update the per-line cache so we don't re-trigger on the same line later
+    byLine.set(lineNumberZeroBased, nextText);
 
-	// 1) Per-line dedupe (same file+line text)
-	if (prev === nextText) return false;
+    // 1) Per-line dedupe (same file+line text)
+    if (prev === nextText) return false;
 
-	// 2) Global dedupe (same text anywhere)
-	if (seenLineContent.has(nextText)) return false;
-	seenLineContent.add(nextText);
-	return true;
+    // 2) Global dedupe (same text anywhere)
+    if (seenLineContent.has(nextText)) return false;
+    seenLineContent.add(nextText);
+    return true;
+}
+
+/**
+ * Log a code line by sending it to the API
+ */
+async function logCodeLine(fileUri, fileName, lineNumber, textNormalized, source = 'manual') {
+    if (!currentSessionId) return;
+
+    const event = {
+        sessionId: currentSessionId,
+        clientTimestampMs: Date.now(),
+        fileUri: fileUri,
+        fileName: fileName,
+        lineNumber: lineNumber + 1, // Convert 0-based to 1-based
+        textNormalized: textNormalized,
+        source: source
+    };
+
+    try {
+        await sendEventToAPI(event);
+        console.log(`✅ Sent event: ${fileName}:${lineNumber + 1} [${source}]`);
+    } catch (error) {
+        console.error('❌ Failed to send event:', error.message);
+        // Don't show error to user to avoid spam, just log it
+    }
 }
 
 /**
@@ -82,23 +149,25 @@ function shouldLogLine(fileKey, lineNumberZeroBased, nextText) {
  * @param {vscode.Uri} uri
  */
 function scheduleProcessFsUri(uri) {
-	if (!isRecording || !logStream) return;
-	if (!uri || uri.scheme !== 'file') return;
-	if (shouldIgnoreFsPath(uri.fsPath)) return;
-	
-	// Avoid logging startup noise right when recording begins
-	if (recordingStartedAtMs && Date.now() - recordingStartedAtMs < FS_WARMUP_MS) return;
+    if (!isRecording) return;
+    if (!uri || uri.scheme !== 'file') return;
+    if (shouldIgnoreFsPath(uri.fsPath)) return;
 
-	const fileKey = uri.toString();
-	const existing = pendingFsProcessByFileKey.get(fileKey);
-	if (existing) clearTimeout(existing);
+    // Avoid logging startup noise right when recording begins
+    if (recordingStartedAtMs && Date.now() - recordingStartedAtMs < FS_WARMUP_MS) {
+        return;
+    }
 
-	const timeout = setTimeout(async () => {
-		pendingFsProcessByFileKey.delete(fileKey);
-		await processFsUri(uri);
-	}, 200);
+    const fileKey = uri.toString();
+    const existing = pendingFsProcessByFileKey.get(fileKey);
+    if (existing) clearTimeout(existing);
 
-	pendingFsProcessByFileKey.set(fileKey, timeout);
+    const timeout = setTimeout(async () => {
+        pendingFsProcessByFileKey.delete(fileKey);
+        await processFsUri(uri);
+    }, 300); // Slightly longer debounce to reduce noise
+
+    pendingFsProcessByFileKey.set(fileKey, timeout);
 }
 
 /**
@@ -107,258 +176,279 @@ function scheduleProcessFsUri(uri) {
  * @param {vscode.Uri} uri
  */
 async function processFsUri(uri) {
-	if (!isRecording || !logStream) return;
-	if (!uri || uri.scheme !== 'file') return;
-	if (shouldIgnoreFsPath(uri.fsPath)) return;
+    if (!isRecording) return;
+    if (!uri || uri.scheme !== 'file') return;
+    if (shouldIgnoreFsPath(uri.fsPath)) return;
 
-	try {
-		const buf = await fs.promises.readFile(uri.fsPath);
-		// crude safety: skip huge files (>1MB)
-		if (buf.length > 1024 * 1024) return;
-		const text = buf.toString('utf8');
-		const newLines = text.split(/\r?\n/);
+    // Skip if still in warmup period
+    if (recordingStartedAtMs && Date.now() - recordingStartedAtMs < FS_WARMUP_MS) {
+        return;
+    }
 
-		const fileKey = uri.toString();
-		const prevLines = fileSnapshotLinesByFileKey.get(fileKey);
+    try {
+        const document = await vscode.workspace.openTextDocument(uri);
+        const text = document.getText();
 
-		// If we've never seen this file before during recording, treat current as baseline.
-		// (We avoid logging the entire file the first time to reduce noise.)
-		if (!prevLines) {
-			fileSnapshotLinesByFileKey.set(fileKey, newLines);
-			return;
-		}
+        // crude safety: skip huge files (>1MB)
+        if (text.length > 1024 * 1024) return;
 
-		const fileName = path.basename(uri.fsPath);
-		const timestamp = new Date().toLocaleTimeString();
-		const max = Math.max(prevLines.length, newLines.length);
-		for (let i = 0; i < max; i++) {
-			const prev = prevLines[i] ?? '';
-			const next = newLines[i] ?? '';
-			if (prev === next) continue;
+        const newLines = text.split(/\r?\n/);
+        const fileKey = uri.toString();
+        const prevLines = fileSnapshotLinesByFileKey.get(fileKey);
 
-			const normalized = next.replace(/^\s+/, '');
-			if (normalized.trim().length === 0) continue;
-			if (!shouldLogLine(fileKey, i, normalized)) continue;
+        // If we've never seen this file before during recording, treat current as baseline.
+        // DO NOT LOG - just save the snapshot for future comparisons
+        if (!prevLines) {
+            fileSnapshotLinesByFileKey.set(fileKey, newLines);
+            return;
+        }
 
-			logStream.write(`[${timestamp}] ${fileName} | Line ${i + 1}: ${normalized}\n`);
-		}
+        const fileName = path.basename(uri.fsPath);
+        const max = Math.max(prevLines.length, newLines.length);
 
-		fileSnapshotLinesByFileKey.set(fileKey, newLines);
-	} catch (e) {
-		// ignore read / decode errors
-	}
+        for (let i = 0; i < max; i++) {
+            const prev = prevLines[i] ?? '';
+            const next = newLines[i] ?? '';
+            if (prev === next) continue;
+
+            const normalized = next.replace(/^\s+/, '');
+            if (normalized.trim().length === 0) continue;
+            if (!shouldLogLine(fileKey, i, normalized)) continue;
+
+            // Send to API with source='agent' since it's a file system change
+            await logCodeLine(fileKey, fileName, i, normalized, 'agent');
+        }
+
+        fileSnapshotLinesByFileKey.set(fileKey, newLines);
+    } catch (e) {
+        console.error('Failed to process file:', e);
+    }
 }
 
 /**
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
-	// Start Recording command
-	const startRecordingCommand = vscode.commands.registerCommand('vibe-learn.startRecording', function () {
-		if (isRecording) {
-			vscode.window.showWarningMessage('Recording is already in progress!');
-			return;
-		}
+    // Start Recording command
+    const startRecordingCommand = vscode.commands.registerCommand('vibe-learn.startRecording', async function () {
+        if (isRecording) {
+            vscode.window.showWarningMessage('Recording is already in progress!');
+            return;
+        }
 
-		// Create log file path in the workspace root
-		const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-		if (!workspaceFolder) {
-			vscode.window.showErrorMessage('No workspace folder found. Please open a folder first.');
-			return;
-		}
+        // Prompt for session ID
+        const sessionId = await vscode.window.showInputBox({
+            prompt: 'Enter a session ID for this recording',
+            placeHolder: 'e.g., feature-login-page, debug-session-1',
+            validateInput: (value) => {
+                if (!value || value.trim().length === 0) {
+                    return 'Session ID cannot be empty';
+                }
+                return null;
+            }
+        });
 
-		const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-		logFilePath = path.join(workspaceFolder.uri.fsPath, `code-recording-${timestamp}.txt`);
+        if (!sessionId) {
+            return; // User cancelled
+        }
 
-		// Set up the log file
-		try {
-			logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
-			logStream.write(`=== Recording Started: ${new Date().toLocaleString()} ===\n\n`);
-			
-			isRecording = true;
-			recordingStartedAtMs = Date.now();
-			lastLineLogged = -1;
-			lastFileName = '';
-			lastLoggedLineTextByFile.clear();
-			seenLineContent.clear();
-			fileSnapshotLinesByFileKey.clear();
-			vscode.window.showInformationMessage('Recording started! Logging completed lines.');
+        currentSessionId = sessionId.trim();
 
-			// Snapshot currently-open docs as baseline (the file initial content) for FS diffs
-			vscode.workspace.textDocuments.forEach((doc) => {
-				if (doc.uri.scheme !== 'file') return;
-				if (shouldIgnoreFsPath(doc.uri.fsPath)) return;
-				fileSnapshotLinesByFileKey.set(doc.uri.toString(), doc.getText().split(/\r?\n/));
-			});
+        try {
+            isRecording = true;
+            recordingStartedAtMs = Date.now();
+            lastLineLogged = -1;
+            lastFileName = '';
+            lastLoggedLineTextByFile.clear();
+            seenLineContent.clear();
+            fileSnapshotLinesByFileKey.clear();
 
-			// If the user opens a new file during recording, snapshot it as baseline for that file. We are setting up an array of lines for that file
-			openDocListener = vscode.workspace.onDidOpenTextDocument((doc) => {
-				if (!isRecording) return;
-				if (doc.uri.scheme !== 'file') return;
-				if (shouldIgnoreFsPath(doc.uri.fsPath)) return;
-				const key = doc.uri.toString();
-				if (!fileSnapshotLinesByFileKey.has(key)) {
-					fileSnapshotLinesByFileKey.set(key, doc.getText().split(/\r?\n/));
-				}
-			});
-			context.subscriptions.push(openDocListener); // Discard the listener when the extension is deactivated
+            vscode.window.showInformationMessage(`🎙️ Recording started for session: ${currentSessionId}`);
+            console.log(`🎙️ Recording started at ${new Date().toLocaleTimeString()}`);
 
-			// Watch for file changes on disk (captures edits by agents / tools that bypass editor keystrokes)
-			fsWatcher = vscode.workspace.createFileSystemWatcher('**/*');
-			context.subscriptions.push(fsWatcher);
-			// Schedule the file change to be processed
-			fsWatcher.onDidCreate((uri) => scheduleProcessFsUri(uri));
-			fsWatcher.onDidChange((uri) => scheduleProcessFsUri(uri));
-			fsWatcher.onDidDelete((uri) => {
-				if (!uri) return;
-				const key = uri.toString();
-				fileSnapshotLinesByFileKey.delete(key);
-				const pending = pendingFsProcessByFileKey.get(key);
-				if (pending) clearTimeout(pending);
-				pendingFsProcessByFileKey.delete(key);
-			});
+            // CRITICAL: Snapshot currently-open docs as baseline
+            // We DON'T log these - just store them to detect FUTURE changes
+            vscode.workspace.textDocuments.forEach((doc) => {
+                if (doc.uri.scheme !== 'file') return;
+                if (shouldIgnoreFsPath(doc.uri.fsPath)) return;
+                const lines = doc.getText().split(/\r?\n/);
+                fileSnapshotLinesByFileKey.set(doc.uri.toString(), lines);
+                console.log(`📸 Snapshotted baseline: ${path.basename(doc.uri.fsPath)} (${lines.length} lines)`);
+            });
 
-			// Listen to document changes
-			changeListener = vscode.workspace.onDidChangeTextDocument((event) => {
-				if (!isRecording || !logStream) return;
+            // If the user opens a new file during recording, snapshot it as baseline
+            openDocListener = vscode.workspace.onDidOpenTextDocument((doc) => {
+                if (!isRecording) return;
+                if (doc.uri.scheme !== 'file') return;
+                if (shouldIgnoreFsPath(doc.uri.fsPath)) return;
+                const key = doc.uri.toString();
+                if (!fileSnapshotLinesByFileKey.has(key)) {
+                    const lines = doc.getText().split(/\r?\n/);
+                    fileSnapshotLinesByFileKey.set(key, lines);
+                    console.log(`📸 Snapshotted new file: ${path.basename(doc.uri.fsPath)} (${lines.length} lines)`);
+                }
+            });
+            context.subscriptions.push(openDocListener);
 
-				const document = event.document;
-				if (document.uri.scheme !== 'file') return;
-				if (isRecordingOutputFile(document.uri.fsPath)) return;
+            // Watch for file changes on disk (captures edits by agents / tools)
+            fsWatcher = vscode.workspace.createFileSystemWatcher('**/*');
+            context.subscriptions.push(fsWatcher);
 
-				const fileName = path.basename(document.fileName);
-				const timestamp = new Date().toLocaleTimeString();
-				const fileKey = document.uri.toString();
+            fsWatcher.onDidCreate((uri) => scheduleProcessFsUri(uri));
+            fsWatcher.onDidChange((uri) => scheduleProcessFsUri(uri));
+            fsWatcher.onDidDelete((uri) => {
+                if (!uri) return;
+                const key = uri.toString();
+                fileSnapshotLinesByFileKey.delete(key);
+                const pending = pendingFsProcessByFileKey.get(key);
+                if (pending) clearTimeout(pending);
+                pendingFsProcessByFileKey.delete(key);
+            });
 
-				event.contentChanges.forEach((change) => {
-					const currentLine = change.range.start.line;
+            // Listen to document changes (manual typing)
+            changeListener = vscode.workspace.onDidChangeTextDocument(async (event) => {
+                if (!isRecording) return;
 
-					// Log if: 
-					// 1. User pressed Enter (\n)
-					// 2. User moved to a different line (lastLineLogged !== currentLine)
-					// 3. User switched to a different file (lastFileName !== fileName)
-					if (change.text.includes('\n') || 
-						(lastLineLogged !== -1 && (lastLineLogged !== currentLine || lastFileName !== fileName))) {
-						
-						// Determine which file and line to log
-						// If we switched files, we log the PREVIOUS file/line we just left
-						const fileToLog = (lastFileName !== '' && lastFileName !== fileName) ? lastFileName : fileName;
-						const lineToLog = (lastLineLogged !== -1 && lastLineLogged !== currentLine) ? lastLineLogged : currentLine;
-						const fileKeyToLog = (lastFileName !== '' && lastFileName !== fileName)
-							? (vscode.workspace.textDocuments.find(d => path.basename(d.fileName) === lastFileName)?.uri.toString() || fileKey)
-							: fileKey;
-						
-						try {
-							// We need to find the correct document to get the text from if we switched files
-							let textDocument = document;
-							if (lastFileName !== '' && lastFileName !== fileName) {
-								// Find the old document in open tabs if possible
-								const oldDoc = vscode.workspace.textDocuments.find(d => path.basename(d.fileName) === lastFileName);
-								if (oldDoc) textDocument = oldDoc;
-							}
+                const document = event.document;
+                if (document.uri.scheme !== 'file') return;
+                if (shouldIgnoreFsPath(document.uri.fsPath)) return;
 
-							const lineText = textDocument.lineAt(lineToLog).text;
-							const normalizedLineText = lineText.replace(/^\s+/, '');
-							if (normalizedLineText.trim().length > 0 && shouldLogLine(fileKeyToLog, lineToLog, normalizedLineText)) {
-								logStream.write(`[${timestamp}] ${fileToLog} | Line ${lineToLog + 1}: ${normalizedLineText}\n`);
-							}
-						} catch (e) {
-							// Fallback if the line or document is no longer accessible
-						}
-					}
-					
-					lastLineLogged = currentLine;
-					lastFileName = fileName;
-				});
-			});
+                const fileName = path.basename(document.fileName);
+                const fileKey = document.uri.toString();
 
-			context.subscriptions.push(changeListener);
-		} catch (error) {
-			vscode.window.showErrorMessage(`Failed to start recording: ${error.message}`);
-			isRecording = false;
-		}
-	});
+                // Initialize snapshot for this file if not already done
+                if (!fileSnapshotLinesByFileKey.has(fileKey)) {
+                    const lines = document.getText().split(/\r?\n/);
+                    fileSnapshotLinesByFileKey.set(fileKey, lines);
+                    console.log(`📸 Snapshotted on first edit: ${fileName} (${lines.length} lines)`);
+                }
 
-	// Stop Recording command
-	const stopRecordingCommand = vscode.commands.registerCommand('vibe-learn.stopRecording', function () {
-		if (!isRecording) {
-			vscode.window.showWarningMessage('No recording in progress!');
-			return;
-		}
+                event.contentChanges.forEach(async (change) => {
+                    const currentLine = change.range.start.line;
 
-		// Flush the last line being worked on
-		if (isRecording && logStream && lastLineLogged !== -1) {
-			try {
-				// Try to find the document for the last file we were editing
-				const textDocument = vscode.workspace.textDocuments.find(d => path.basename(d.fileName) === lastFileName) 
-				                  || vscode.window.activeTextEditor?.document;
-				
-				if (textDocument && textDocument.uri.scheme === 'file' && !isRecordingOutputFile(textDocument.uri.fsPath)) {
-					const lineText = textDocument.lineAt(lastLineLogged).text;
-					const normalizedLineText = lineText.replace(/^\s+/, '');
-					if (normalizedLineText.trim().length > 0) {
-						const timestamp = new Date().toLocaleTimeString();
-						const key = textDocument.uri.toString();
-						if (shouldLogLine(key, lastLineLogged, normalizedLineText)) {
-							logStream.write(`[${timestamp}] ${path.basename(textDocument.fileName)} | Line ${lastLineLogged + 1}: ${normalizedLineText} (Final)\n`);
-						}
-					}
-				}
-			} catch (e) {
-				// Ignore errors during final flush
-			}
-		}
+                    // Log if:
+                    // 1. User pressed Enter (\n)
+                    // 2. User moved to a different line
+                    // 3. User switched to a different file
+                    if (change.text.includes('\n') ||
+                        (lastLineLogged !== -1 && (lastLineLogged !== currentLine || lastFileName !== fileName))) {
 
-		isRecording = false;
+                        const fileToLog = (lastFileName !== '' && lastFileName !== fileName) ? lastFileName : fileName;
+                        const lineToLog = (lastLineLogged !== -1 && lastLineLogged !== currentLine) ? lastLineLogged : currentLine;
+                        const fileKeyToLog = (lastFileName !== '' && lastFileName !== fileName)
+                            ? (vscode.workspace.textDocuments.find(d => path.basename(d.fileName) === lastFileName)?.uri.toString() || fileKey)
+                            : fileKey;
 
-		// Close log file
-		if (logStream) {
-			logStream.write(`\n=== Recording Stopped: ${new Date().toLocaleString()} ===\n`);
-			logStream.end();
-			logStream = null;
-		}
+                        try {
+                            let textDocument = document;
+                            if (lastFileName !== '' && lastFileName !== fileName) {
+                                const oldDoc = vscode.workspace.textDocuments.find(d => path.basename(d.fileName) === lastFileName);
+                                if (oldDoc) textDocument = oldDoc;
+                            }
 
-		// Dispose change listener
-		if (changeListener) {
-			changeListener.dispose();
-			changeListener = null;
-		}
-		if (fsWatcher) {
-			fsWatcher.dispose();
-			fsWatcher = null;
-		}
-		if (openDocListener) {
-			openDocListener.dispose();
-			openDocListener = null;
-		}
-		recordingStartedAtMs = 0;
-		pendingFsProcessByFileKey.forEach((t) => clearTimeout(t));
-		pendingFsProcessByFileKey.clear();
-		fileSnapshotLinesByFileKey.clear();
+                            const lineText = textDocument.lineAt(lineToLog).text;
+                            const normalizedLineText = lineText.replace(/^\s+/, '');
 
-		if (logFilePath) {
-			vscode.window.showInformationMessage(`Recording stopped! Log saved to: ${path.basename(logFilePath)}`);
-			logFilePath = null;
-		}
-	});
+                            if (normalizedLineText.trim().length > 0 && shouldLogLine(fileKeyToLog, lineToLog, normalizedLineText)) {
+                                await logCodeLine(fileKeyToLog, fileToLog, lineToLog, normalizedLineText, 'manual');
+                            }
+                        } catch (e) {
+                            console.error('Failed to log line:', e);
+                        }
+                    }
 
-	context.subscriptions.push(startRecordingCommand);
-	context.subscriptions.push(stopRecordingCommand);
+                    lastLineLogged = currentLine;
+                    lastFileName = fileName;
+                });
+            });
+
+            context.subscriptions.push(changeListener);
+
+        } catch (error) {
+            vscode.window.showErrorMessage(`Failed to start recording: ${error.message}`);
+            isRecording = false;
+            currentSessionId = null;
+        }
+    });
+
+    // Stop Recording command
+    const stopRecordingCommand = vscode.commands.registerCommand('vibe-learn.stopRecording', async function () {
+        if (!isRecording) {
+            vscode.window.showWarningMessage('No recording in progress!');
+            return;
+        }
+
+        // Flush the last line being worked on
+        if (isRecording && lastLineLogged !== -1) {
+            try {
+                const textDocument = vscode.workspace.textDocuments.find(d => path.basename(d.fileName) === lastFileName)
+                    || vscode.window.activeTextEditor?.document;
+
+                if (textDocument && textDocument.uri.scheme === 'file' && !shouldIgnoreFsPath(textDocument.uri.fsPath)) {
+                    const lineText = textDocument.lineAt(lastLineLogged).text;
+                    const normalizedLineText = lineText.replace(/^\s+/, '');
+                    if (normalizedLineText.trim().length > 0) {
+                        const key = textDocument.uri.toString();
+                        if (shouldLogLine(key, lastLineLogged, normalizedLineText)) {
+                            await logCodeLine(key, path.basename(textDocument.fileName), lastLineLogged, normalizedLineText, 'manual');
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to flush final line:', e);
+            }
+        }
+
+        const sessionId = currentSessionId;
+        isRecording = false;
+        currentSessionId = null;
+
+        // Dispose listeners
+        if (changeListener) {
+            changeListener.dispose();
+            changeListener = null;
+        }
+        if (fsWatcher) {
+            fsWatcher.dispose();
+            fsWatcher = null;
+        }
+        if (openDocListener) {
+            openDocListener.dispose();
+            openDocListener = null;
+        }
+
+        recordingStartedAtMs = 0;
+        pendingFsProcessByFileKey.forEach((t) => clearTimeout(t));
+        pendingFsProcessByFileKey.clear();
+        fileSnapshotLinesByFileKey.clear();
+
+        vscode.window.showInformationMessage(`⏹️ Recording stopped for session: ${sessionId}`);
+        console.log(`⏹️ Recording stopped at ${new Date().toLocaleTimeString()}`);
+    });
+
+    context.subscriptions.push(startRecordingCommand);
+    context.subscriptions.push(stopRecordingCommand);
 }
 
 // This method is called when your extension is deactivated
 function deactivate() {
-	// Clean up if recording is still active
-	if (isRecording && logStream) {
-		logStream.write(`\n=== Recording Stopped (Extension Deactivated): ${new Date().toLocaleString()} ===\n`);
-		logStream.end();
-	}
-	if (changeListener) {
-		changeListener.dispose();
-	}
+    // Clean up if recording is still active
+    if (isRecording) {
+        isRecording = false;
+        currentSessionId = null;
+    }
+    if (changeListener) {
+        changeListener.dispose();
+    }
+    if (fsWatcher) {
+        fsWatcher.dispose();
+    }
+    if (openDocListener) {
+        openDocListener.dispose();
+    }
 }
 
 module.exports = {
-	activate,
-	deactivate
+    activate,
+    deactivate
 }
