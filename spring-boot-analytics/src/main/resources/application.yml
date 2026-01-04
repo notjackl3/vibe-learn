@@ -1,0 +1,48 @@
+spring:
+  application:
+    name: analytics-service
+
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9094}
+    consumer:
+      # CRITICAL: Different group from consumer service!
+      group-id: ${SPRING_KAFKA_CONSUMER_GROUP_ID:analytics-group}
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+        spring.json.value.default.type: com.vibelearn.analytics.model.CodeEvent
+
+  mongodb:
+    uri: ${SPRING_DATA_MONGODB_URI:mongodb://localhost:27017/vibe_learn}
+    database: ${SPRING_DATA_MONGODB_DATABASE:vibe_learn}
+
+# Analytics-specific config
+analytics:
+  flush-interval-seconds: 60  # Flush aggregated data every 60 seconds
+  window-size-minutes: 5
+
+kafka:
+  topic:
+    code-events: ${KAFKA_TOPIC_CODE_EVENTS:code-events}
+
+# Expose metrics for Prometheus
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,metrics,info
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+logging:
+  level:
+    com.vibelearn.analytics: INFO
+    org.springframework.kafka: WARN
+    org.mongodb.driver: WARN
