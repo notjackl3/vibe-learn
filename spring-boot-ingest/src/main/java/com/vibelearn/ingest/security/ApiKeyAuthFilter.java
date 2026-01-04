@@ -27,6 +27,12 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
     @Value("${api.key}")
     private String validApiKey;  // The correct API key from application.yml
 
+    // Prevent API key requirements for Grafana and Prometheus services
+    @Override
+    protected boolean shouldNotFilter(HttpServletRequest request) {
+        return request.getRequestURI().startsWith("/actuator/");
+    }
+
     /**
      * Checks every request for valid API key.
      * If valid, allows request to proceed. If invalid, returns 401.

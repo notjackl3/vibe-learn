@@ -6,7 +6,7 @@ echo "Testing analytics with session: $SESSION_ID"
 # Send 15 events across 3 files
 FILES=("Controller.java" "Service.java" "Repository.java")
 
-for i in {1..15}; do
+for i in {1..100}; do
   FILE=${FILES[$((RANDOM % 3))]}
   
   curl -X POST http://localhost:8080/api/events \
@@ -23,10 +23,10 @@ for i in {1..15}; do
     }" \
     -s -o /dev/null -w "Sent event $i\n"
   
-  sleep 0.5
+  sleep 0.1
 done
 
 echo ""
-echo "✅ Sent 15 events for session: $SESSION_ID"
+echo "✅ Sent 100 events for session: $SESSION_ID"
 echo "⏳ Wait 60 seconds for analytics flush, then check MongoDB with:"
 echo "   docker exec vibe_mongo mongosh vibe_learn --eval \"db.session_analytics.find().sort({_id: -1}).limit(1).pretty()\""
