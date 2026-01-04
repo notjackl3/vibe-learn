@@ -9,6 +9,7 @@ import org.springframework.security.config.annotation.web.configuration.EnableWe
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import jakarta.annotation.PostConstruct;
 
 /**
  * Configures security for the ingest API.
@@ -28,26 +29,23 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
-            // Disable CSRF (not needed for API-only service with API key auth)
-            .csrf(csrf -> csrf.disable())
-            
-            // No sessions - each request must have API key (stateless)
-            .sessionManagement(session -> 
-                session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-            
-            // Authorization rules
-            .authorizeHttpRequests(auth -> auth
-                // Require authentication for /api/** endpoints
-                .requestMatchers("/api/**").authenticated()
-                // Allow health checks, metrics without auth (for monitoring)
-                .requestMatchers("/actuator/health", "/actuator/info").permitAll()
-                // Deny everything else by default
-                .anyRequest().denyAll()
-            )
-            
-            // Add our custom API key filter BEFORE Spring's username/password filter
-            .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class);
+                .csrf(csrf -> csrf.disable())
+                .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .formLogin(form -> form.disable())
+                .httpBasic(basic -> basic.disable())
+                .logout(logout -> logout.disable())
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/actuator/**").permitAll()
+                        .requestMatchers("/api/**").authenticated()
+                        .anyRequest().permitAll()
+                )
+                .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
+    }
+
+    @PostConstruct
+    public void init() {
+        System.out.println(">>> SecurityConfig LOADED");
     }
 }

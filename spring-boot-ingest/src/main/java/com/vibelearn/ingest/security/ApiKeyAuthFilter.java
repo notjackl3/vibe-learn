@@ -24,14 +24,16 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
 
     private static final String API_KEY_HEADER = "X-API-Key";
     
-    @Value("${api.key}")
+    @Value("${API_KEY:custom-api-key-here}")
     private String validApiKey;  // The correct API key from application.yml
 
     // Prevent API key requirements for Grafana and Prometheus services
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        return request.getRequestURI().startsWith("/actuator/");
+        String path = request.getRequestURI();
+        return path.startsWith("/actuator/") || !path.startsWith("/api/");
     }
+
 
     /**
      * Checks every request for valid API key.

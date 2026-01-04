@@ -25,7 +25,7 @@ public class EventConsumerService {
     // TEST LISTENER - receives raw string to see if listener works at all
     @KafkaListener(
         topics = "${kafka.topic.code-events}",
-        groupId = "test-raw-group",
+        groupId = "event-consumer-group",
         containerFactory = "kafkaListenerContainerFactory"
     )
     public void testRawConsumer(String rawMessage) {

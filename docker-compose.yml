@@ -20,11 +20,13 @@ services:
     volumes:
       - kafka_data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server 127.0.0.1:9092 >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 20s
+      test: [ "CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1" ]
+      interval: 15s        # ⭐ Check every 15s (less aggressive)
+      timeout: 10s         # ⭐ Allow 10s for response
+      retries: 10          # ⭐ Retry 10 times before failing
+      start_period: 90s   # ⭐ Give Kafka 90s to start
+    networks:
+      - vibe-network
 
   mongo:
     image: mongo:latest
@@ -41,6 +43,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 12
+    networks:
+      - vibe-network
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
@@ -54,6 +58,8 @@ services:
     environment:
       - KAFKA_CLUSTERS_0_NAME=local
       - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+    networks:
+      - vibe-network
 
   mongo-express:
     image: mongo-express:1.0.2
@@ -68,6 +74,8 @@ services:
       - ME_CONFIG_MONGODB_SERVER=mongo
       - ME_CONFIG_MONGODB_PORT=27017
       - ME_CONFIG_BASICAUTH=false
+    networks:
+      - vibe-network
 
   kafka-init:
     image: apache/kafka:3.8.1
@@ -90,6 +98,8 @@ services:
       echo 'Topics created successfully!'
       /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --list
       "
+    networks:
+      - vibe-network
 
   ingest:
     build: ./spring-boot-ingest
@@ -140,6 +150,8 @@ services:
     build: ./spring-boot-analytics
     container_name: vibe_analytics
     restart: unless-stopped
+    ports:
+      - "8083:8080"
     depends_on:
       kafka:
         condition: service_healthy

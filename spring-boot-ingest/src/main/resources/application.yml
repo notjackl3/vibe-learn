@@ -5,9 +5,17 @@ spring:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
 
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+
 kafka:
   topic:
     code-events: ${KAFKA_TOPIC_CODE_EVENTS:code-events}
 
 api:
   key: ${API_KEY:custom-api-key-here}
+
+logging:
+  level:
+    org.springframework.security: DEBUG

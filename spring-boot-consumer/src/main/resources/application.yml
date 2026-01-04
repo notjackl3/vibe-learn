@@ -28,9 +28,22 @@ kafka:
   topic:
     code-events: ${KAFKA_TOPIC_CODE_EVENTS:code-events}
 
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,metrics,info
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
 logging:
   level:
     com.vibelearn.consumer: DEBUG
-    org.springframework.kafka: DEBUG
+    org.springframework.kafka: WARN
+    org.mongodb.driver: WARN
     org.apache.kafka: INFO
     org.apache.kafka.clients.consumer: DEBUG

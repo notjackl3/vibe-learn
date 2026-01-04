@@ -24,15 +24,20 @@ import java.util.Map;
 @Slf4j
 public class KafkaConsumerConfig {
 
-    @Value("${spring.kafka.bootstrap-servers}")
+    @Value("${spring.kafka.bootstrap-servers:localhost:9092}")
     private String bootstrapServers;
     
-    @Value("${spring.kafka.consumer.group-id}")
+    @Value("${spring.kafka.consumer.group-id:event-consumer-group}")
     private String groupId;
 
     @Bean
     public ConsumerFactory<String, CodeEvent> consumerFactory() {
         Map<String, Object> props = new HashMap<>();
+
+        System.out.println("===========================================");
+        System.out.println("CONSUMER - KAFKA BOOTSTRAP: " + bootstrapServers);
+        System.out.println("CONSUMER - GROUP ID: " + groupId);
+        System.out.println("===========================================");
         
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);

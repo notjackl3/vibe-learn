@@ -20,15 +20,20 @@ import java.util.Map;
 @EnableKafka
 public class KafkaConsumerConfig {
 
-    @Value("${spring.kafka.bootstrap-servers}")
+    @Value("${spring.kafka.bootstrap-servers:localhost:9092}")
     private String bootstrapServers;
 
-    @Value("${spring.kafka.consumer.group-id}")
+    @Value("${spring.kafka.consumer.group-id:analytics-group}")
     private String groupId;
 
     @Bean
     public ConsumerFactory<String, CodeEvent> consumerFactory() {
         Map<String, Object> props = new HashMap<>();
+
+        System.out.println("===========================================");
+        System.out.println("KAFKA BOOTSTRAP SERVERS: " + bootstrapServers);
+        System.out.println("KAFKA GROUP ID: " + groupId);
+        System.out.println("===========================================");
 
         props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
