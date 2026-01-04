@@ -3,6 +3,8 @@ package com.vibelearn.consumer.service;
 import com.vibelearn.consumer.model.CodeEvent;
 import com.vibelearn.consumer.repository.EventRepository;
 import lombok.extern.slf4j.Slf4j;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.handler.annotation.Header;
@@ -14,30 +16,31 @@ import org.springframework.stereotype.Service;
 public class EventConsumerService {
 
     private final EventRepository eventRepository;
+    private final MeterRegistry meterRegistry;
 
-    public EventConsumerService(EventRepository eventRepository) {
+    // Metrics
+    private final Counter eventsProcessed;
+    private final Counter processingErrors;
+
+    public EventConsumerService(EventRepository eventRepository, MeterRegistry meterRegistry) {
         this.eventRepository = eventRepository;
-        log.info("========================================");
-        log.info("EventConsumerService BEAN CREATED!");
-        log.info("========================================");
-    }
+        this.meterRegistry = meterRegistry;
 
-    // TEST LISTENER - receives raw string to see if listener works at all
-    @KafkaListener(
-        topics = "${kafka.topic.code-events}",
-        groupId = "event-consumer-group",
-        containerFactory = "kafkaListenerContainerFactory"
-    )
-    public void testRawConsumer(String rawMessage) {
-        log.info("========== RAW MESSAGE RECEIVED ==========");
-        log.info("Raw Message: {}", rawMessage);
-        log.info("==========================================");
+        // Initialize metrics
+        this.eventsProcessed = Counter.builder("consumer.events.processed")
+                .description("Total events processed by consumer")
+                .register(meterRegistry);
+
+        this.processingErrors = Counter.builder("consumer.events.errors")
+                .description("Total errors processing events")
+                .register(meterRegistry);
     }
 
     // Original listener
     @KafkaListener(
         topics = "${kafka.topic.code-events}",
-        groupId = "${spring.kafka.consumer.group-id}"
+        groupId = "${spring.kafka.consumer.group-id}",
+        containerFactory = "kafkaListenerContainerFactory"
     )
     public void consumeEvent(
             @Payload CodeEvent event,
@@ -55,10 +58,15 @@ public class EventConsumerService {
             event.setSavedTimestampMs(System.currentTimeMillis());
             CodeEvent savedEvent = eventRepository.save(event);
             log.debug("Event saved to MongoDB with id: {}", savedEvent.getId());
+
+            eventsProcessed.increment();
             
         } catch (Exception e) {
             log.error("Failed to save event to MongoDB: session={}, error={}", 
                      event.getSessionId(), e.getMessage(), e);
+
+            processingErrors.increment();
+
             throw e;
         }
     }

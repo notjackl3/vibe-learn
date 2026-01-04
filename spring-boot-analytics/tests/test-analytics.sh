@@ -18,7 +18,7 @@ for i in {1..100}; do
       \"fileUri\": \"file:///$FILE\",
       \"fileName\": \"$FILE\",
       \"lineNumber\": $i,
-      \"textNormalized\": \"line $i code\",
+      \"textNormalized\": \"line $i code testing\",
       \"source\": \"test-script\"
     }" \
     -s -o /dev/null -w "Sent event $i\n"
@@ -30,3 +30,6 @@ echo ""
 echo "✅ Sent 100 events for session: $SESSION_ID"
 echo "⏳ Wait 60 seconds for analytics flush, then check MongoDB with:"
 echo "   docker exec vibe_mongo mongosh vibe_learn --eval \"db.session_analytics.find().sort({_id: -1}).limit(1).pretty()\""
+
+# Test completed
+exit 0
