@@ -1,65 +1,74 @@
-# vibe-learn README
+# Vibe-Learn
 
-This is the README for your extension "vibe-learn". After writing up a brief description, we recommend including the following sections.
+Vibe-Learn is a **VS Code extension + Dockerized backend** that records “code line events” during a dev session and streams them into a small microservice pipeline. The backend stores events in MongoDB, exposes analytics, and is fully monitored with **Prometheus + Grafana**.
 
-## Features
+## What’s in this repo
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+- **VS Code extension** (`extension.js`): records code edits and sends events to the ingest API.
+- **Ingest service** (`spring-boot-ingest`): REST API that accepts events and produces them to Kafka.
+- **Consumer service** (`spring-boot-consumer`): consumes events from Kafka and persists them to MongoDB.
+- **Analytics service** (`spring-boot-analytics`): consumes events and exposes aggregated/session analytics (also exposes Prometheus metrics).
+- **Infra (Docker Compose)**: Kafka (KRaft), MongoDB, Kafka UI, Mongo Express, Prometheus, Grafana.
 
-For example if there is an image subfolder under your extension project workspace:
+## Quickstart (Docker)
 
-\!\[feature X\]\(images/feature-x.png\)
+### Prerequisites
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+- **Docker Desktop** (includes `docker compose`)
 
-## Requirements
+### Start everything
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+From the `vibe-learn/` directory:
 
-## Extension Settings
+```bash
+docker compose up --build
+```
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+### Useful local URLs
 
-For example:
+- **Ingest API**: `http://localhost:8080`
+- **Consumer**: `http://localhost:8081`
+- **Analytics**: `http://localhost:8083`
+- **Kafka UI**: `http://localhost:8088`
+- **Mongo Express**: `http://localhost:8089`
+- **Prometheus**: `http://localhost:9090`
+- **Grafana**: `http://localhost:3000` (default login **admin/admin**)
 
-This extension contributes the following settings:
+## Using the VS Code extension (recording)
 
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
+1. Start the backend stack with Docker Compose.
+2. In VS Code, run the extension (Launch Extension / press `F5`).
+3. Run **“Vibe-Learn: Start Recording”**, enter a `sessionId`, and start coding.
+4. Run **“Vibe-Learn: Stop Recording”** to end the session.
 
-## Known Issues
+### API configuration
 
-Calling out known issues can help limit users opening duplicate issues against your extension.
+Right now the extension has the ingest endpoint and API key hard-coded here:
 
-## Release Notes
+- `API_URL = http://localhost:8080/api/events`
+- `API_KEY = custom-api-key-here`
 
-Users appreciate release notes as you update your extension.
+If you change the ingest API key in `docker-compose.yml`, update `extension.js` to match.
 
-### 1.0.0
+## Monitoring (Grafana + Prometheus)
 
-Initial release of ...
+Prometheus is configured to scrape **Spring Boot Actuator** metrics from all microservices at:
 
-### 1.0.1
+- `GET /actuator/prometheus`
 
-Fixed issue #.
+Grafana is provisioned with a Prometheus datasource (`grafana/provisioning/datasources/prometheus.yml`).
 
-### 1.1.0
+### Grafana dashboard
 
-Added features X, Y, and Z.
+![Grafana dashboard monitoring the backend (Prometheus + Grafana)](docs/images/grafana-dashboard.png)
 
----
+### Verify metrics end-to-end
 
-## Working with Markdown
+- Open Prometheus → **Status → Targets** and confirm `ingest`, `consumer`, and `analytics` are **UP**
+- Open Grafana → Explore → query something like `process_resident_memory_bytes` or `http_server_requests_seconds_count`
 
-You can author your README using Visual Studio Code.  Here are some useful editor keyboard shortcuts:
+## Troubleshooting
 
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux)
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux)
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+- **Grafana shows “No data”**: check Prometheus targets are UP and that each service exposes `/actuator/prometheus`.
+- **Extension can’t send events**: confirm `ingest` is running and `extension.js` `API_URL` + `API_KEY` match `docker-compose.yml`.
+- **Kafka not healthy**: `docker compose ps` and check `vibe_kafka` healthcheck; it can take ~1–2 minutes on first start.
