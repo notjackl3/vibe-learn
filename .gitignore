@@ -1,44 +1,109 @@
-*#
+# ─────────────────────────────────────────────────────────────
+# OS / Editor / Temp
+# ─────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*~
+*.swp
+*.swo
+.attach_pid*
+*.pid
+*.pid.lock
+hs_err_pid*
+
+# ─────────────────────────────────────────────────────────────
+# IntelliJ / JetBrains
+# ─────────────────────────────────────────────────────────────
+.idea/
 *.iml
 *.ipr
 *.iws
+
+# ─────────────────────────────────────────────────────────────
+# VS Code
+# ─────────────────────────────────────────────────────────────
+.vscode/
+.vscode-test/
+*.code-workspace
+
+# ─────────────────────────────────────────────────────────────
+# Java / JVM
+# ─────────────────────────────────────────────────────────────
+*.class
 *.jar
-*.sw?
-*~
-.#*
-.*.md.html
-.DS_Store
-.attach_pid*
-.classpath
-.factorypath
-.gradle
-.metadata
-.project
-.recommenders
-.settings
-.springBeans
-.vscode
-/code
 MANIFEST.MF
-_site/
-activemq-data
-bin
-build
-!/**/src/**/bin
-!/**/src/**/build
-build.log
+
+# ─────────────────────────────────────────────────────────────
+# Maven
+# ─────────────────────────────────────────────────────────────
+target/
 dependency-reduced-pom.xml
-dump.rdb
-interpolated*.xml
-lib/
-manifest.yml
-out
-overridedb.*
-target
 .flattened-pom.xml
-secrets.yml
+
+# keep wrapper config, ignore binary
+!.mvn/wrapper/maven-wrapper.properties
+.mvn/wrapper/maven-wrapper.jar
+
+# ─────────────────────────────────────────────────────────────
+# Gradle
+# ─────────────────────────────────────────────────────────────
+.gradle/
+build/
 .gradletasknamecache
-.sts4-cache
+
+# ─────────────────────────────────────────────────────────────
+# Spring / STS / Eclipse
+# ─────────────────────────────────────────────────────────────
+.classpath
+.project
+.factorypath
+.settings/
+.springBeans
+.sts4-cache/
+
+# ─────────────────────────────────────────────────────────────
+# Node / Frontend
+# ─────────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dist/
+.next/
+
+# ─────────────────────────────────────────────────────────────
+# Logs / Runtime
+# ─────────────────────────────────────────────────────────────
+*.log
+logs/
+dump.rdb
+*.db
+*.sqlite
+
+# ─────────────────────────────────────────────────────────────
+# Docker / Env
+# ─────────────────────────────────────────────────────────────
+.env
+.env.*
+docker-compose.override.yml
+
+# ─────────────────────────────────────────────────────────────
+# Misc / Build artifacts
+# ─────────────────────────────────────────────────────────────
+bin/
+out/
+_site/
+lib/
+activemq-data
+build.log
+manifest.yml
+secrets.yml
+overridedb.*
+interpolated*.xml
 .git-hooks/
-node_modules
+
+# ─────────────────────────────────────────────────────────────
+# Kotlin
+# ─────────────────────────────────────────────────────────────
 /.kotlin/

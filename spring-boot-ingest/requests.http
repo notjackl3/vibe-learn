@@ -12,3 +12,4 @@ X-API-Key: custom-api-key-here
   "textNormalized": "console.log(\"test\");",
   "source": "manual"
 }
+clear

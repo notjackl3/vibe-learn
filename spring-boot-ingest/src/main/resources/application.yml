@@ -1,21 +1,66 @@
+# Application Configuration
 spring:
+  application:
+    name: ingest
+  
+  # Kafka Configuration
   kafka:
     bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:kafka:9094}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
-      value-serializer: org.springframework.kafka.support.serializer.JacksonJsonSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        spring.json.type.mapping: codeEvent:com.vibelearn.ingest.model.CodeEvent
 
+  # ⭐ CRITICAL: Completely disable default security user
+  security:
+    user:
+      name: disabled
+      password: disabled
+
+  # ⭐ Exclude auto-configurations that create default users
   autoconfigure:
     exclude:
       - org.springframework.boot.autoconfigure.security.servlet.UserDetailsServiceAutoConfiguration
+      - org.springframework.boot.autoconfigure.security.servlet.SecurityAutoConfiguration
+      - org.springframework.boot.autoconfigure.security.servlet.SecurityFilterAutoConfiguration
 
+# Kafka Topics
 kafka:
   topic:
     code-events: ${KAFKA_TOPIC_CODE_EVENTS:code-events}
 
+# API Key for authentication
 api:
   key: ${API_KEY:custom-api-key-here}
 
+# Server Configuration
+server:
+  port: 8080
+
+# Management Endpoints (Prometheus, Actuator)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,metrics,info
+      base-path: /actuator
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: ${spring.application.name}
+      service: ingest
+  endpoint:
+    health:
+      show-details: always
+    prometheus:
+      enabled: true
+
+# Logging
 logging:
   level:
-    org.springframework.security: DEBUG
+    com.vibelearn.ingest: INFO
+    org.springframework.security: WARN
+    org.springframework.boot.autoconfigure: WARN
