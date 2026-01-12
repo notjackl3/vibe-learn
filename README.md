@@ -41,6 +41,19 @@ docker compose up --build
 3. Run **“Vibe-Learn: Start Recording”**, enter a `sessionId`, and start coding.
 4. Run **“Vibe-Learn: Stop Recording”** to end the session.
 
+## Vision (where this is going)
+
+The long-term goal of Vibe-Learn is to turn **the lines of code you write** (captured as recorded code-line events) into **personalized learning materials** that help you actually retain what you just built.
+
+Planned outputs include:
+
+- **Session summaries**: “what you changed” + “why it matters” in plain language
+- **Quizzes / flashcards**: questions generated from your real code (APIs, patterns, bugs you hit, concepts used)
+- **Code-linked explanations**: answers that reference the exact files/lines you worked on
+- **Spaced repetition**: resurfacing weak areas over time based on your quiz performance
+
+This repo already has the foundation for that workflow (event capture → Kafka → MongoDB → analytics). The next step is building the learning-material generation layer on top of the recorded sessions.
+
 ### API configuration
 
 Right now the extension has the ingest endpoint and API key hard-coded here:
